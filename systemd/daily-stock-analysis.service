@@ -1,0 +1,33 @@
+[Unit]
+Description=Daily Stock Analysis (DSA) – KI-Aktienanalyse Web/API
+Documentation=https://github.com/HatchetMan111/DailyStockAnalysis-Proxmox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dsa
+Group=dsa
+WorkingDirectory=/opt/daily-stock-analysis
+EnvironmentFile=/opt/daily-stock-analysis/.env.runtime
+
+# Web/API-Server + Runtime-Scheduler (geplante Analysen).
+# WEBUI_AUTO_BUILD=false: Das Frontend wird vom Installer (bzw. --update) gebaut,
+# damit der Container beim Boot nicht node/npm braucht.
+ExecStart=/opt/daily-stock-analysis/.venv/bin/python main.py --serve-only --host 0.0.0.0 --port 8000
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+# Harte Limits: DSA lädt viele pandas/numpy-Module und rechnet Analysen.
+# Die Limits sind bewusst grosszügig; bei 2 GB RAM ggf. MAX_WORKERS=1 setzen.
+LimitNOFILE=8192
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=daily-stock-analysis
+
+[Install]
+WantedBy=multi-user.target
