@@ -459,6 +459,9 @@ python3 /root/patch-i18n.py \
 python3 /root/patch-i18n-frontend.py \
     "${CHECKOUT_DIR}/apps/dsa-web/src/api/index.ts" \
     || die "I18n-Frontend-Patch fehlgeschlagen – siehe Ausgabe oben."
+python3 /root/patch-i18n-error-ts.py \
+    "${CHECKOUT_DIR}/apps/dsa-web/src/api/error.ts" \
+    || die "I18n-Error-TS-Patch fehlgeschlagen – siehe Ausgabe oben."
 ok_echo "I18n-Patches eingespielt"
 
 echo ">>> Baue React/Vite-Frontend (npm ci + npm run build, im Container) ..."
@@ -513,10 +516,17 @@ if [ ! -f "${APP_DIR}/.env" ]; then
     # "WEBUI_ENABLED=false" – wir drehen sie auf true, damit der Service
     # (main.py --serve-only) den Webserver startet.
     sed -i 's/^WEBUI_ENABLED=.*/WEBUI_ENABLED=true/' "${APP_DIR}/.env"
+    # Leere LLM-Kanäle aus der .env entfernen: Die Vorlage bringt mehrere
+    # auskommentierte Beispiel-Kanäle (LLM_OPENROUTER_API_KEY=sk-or-xxx …).
+    # Aktiviert man einen, aber lässt den Key leer, meckert das Backend beim
+    # Speichern ("missing_api_key" pro leerem Kanal). Wir entfernen daher alle
+    # Zeilen "LLM_*_API_KEY=" ohne Wert – die UI startet mit sauberen Kanälen
+    # und der User trägt genau einen Key ein.
+    sed -i '/^LLM_[A-Z0-9_]*_API_KEY=$/d' "${APP_DIR}/.env"
     # .env.local (falls vorhanden) ist die persistente Runtime-Config der App
     # (wird von der WebUI beim Speichern neu geschrieben) – nicht anfassen.
     chown "${APP_USER}:${APP_USER}" "${APP_DIR}/.env"
-    ok_echo ".env aus Vorlage erstellt (STOCK_LIST leer, Auto-Build aus)"
+    ok_echo ".env aus Vorlage erstellt (STOCK_LIST leer, Auto-Build aus, leere LLM-Keys entfernt)"
 else
     ok_echo ".env bereits vorhanden – bleibt unverändert"
 fi
@@ -595,15 +605,18 @@ INNEREOF
 write_i18n_patches() {
     local src_p1="$REPO_ROOT/install/patches/patch-i18n.py"
     local src_p2="$REPO_ROOT/install/patches/patch-i18n-frontend.py"
-    if [[ -f "$src_p1" && -f "$src_p2" ]]; then
+    local src_p3="$REPO_ROOT/install/patches/patch-i18n-error-ts.py"
+    if [[ -f "$src_p1" && -f "$src_p2" && -f "$src_p3" ]]; then
         cp "$src_p1" "$TMP_DIR/patch-i18n.py"
         cp "$src_p2" "$TMP_DIR/patch-i18n-frontend.py"
+        cp "$src_p3" "$TMP_DIR/patch-i18n-error-ts.py"
         return 0
     fi
     # Fallback für den wget-Einzeiler: Patches von der Raw-URL laden.
     local base="https://raw.githubusercontent.com/HatchetMan111/DailyStock-Analysis-Proxmox/main/install/patches"
     wget -qO "$TMP_DIR/patch-i18n.py" "$base/patch-i18n.py" || die "I18n-Patch (Backend) konnte nicht geladen werden: $base/patch-i18n.py"
     wget -qO "$TMP_DIR/patch-i18n-frontend.py" "$base/patch-i18n-frontend.py" || die "I18n-Patch (Frontend) konnte nicht geladen werden: $base/patch-i18n-frontend.py"
+    wget -qO "$TMP_DIR/patch-i18n-error-ts.py" "$base/patch-i18n-error-ts.py" || die "I18n-Patch (error.ts) konnte nicht geladen werden: $base/patch-i18n-error-ts.py"
 }
 
 run_inner_setup() {
@@ -628,6 +641,7 @@ run_inner_setup() {
     write_i18n_patches
     pct push "$ct_id" "$TMP_DIR/patch-i18n.py" /root/patch-i18n.py
     pct push "$ct_id" "$TMP_DIR/patch-i18n-frontend.py" /root/patch-i18n-frontend.py
+    pct push "$ct_id" "$TMP_DIR/patch-i18n-error-ts.py" /root/patch-i18n-error-ts.py
     # Variablen via env in den Container (kein Expansion-Heredoc → keine
     # Escaping-Gruben). set -o pipefail: ein Crash im Inner-Script darf nicht
     # durch `tee` maskiert werden (sonst meldet der Host Erfolg, der CT nicht).

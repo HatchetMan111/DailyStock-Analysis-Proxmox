@@ -390,7 +390,7 @@ test_i18n_patch_files() {
     # Die Patches liegen im Repo unter install/patches/ und müssen gültiges
     # Python sein (write_i18n_patches kopiert sie bei Repo-Nutzung, sonst wget).
     local patches_dir="$REPO_ROOT/install/patches"
-    if [[ -f "$patches_dir/patch-i18n.py" && -f "$patches_dir/patch-i18n-frontend.py" ]]; then
+    if [[ -f "$patches_dir/patch-i18n.py" && -f "$patches_dir/patch-i18n-frontend.py" && -f "$patches_dir/patch-i18n-error-ts.py" ]]; then
         pass "Patch-Dateien im Repo vorhanden"
     else
         fail "Patch-Dateien fehlen unter install/patches/"
@@ -405,6 +405,11 @@ test_i18n_patch_files() {
         pass "patch-i18n-frontend.py syntaktisch gültig"
     else
         fail "patch-i18n-frontend.py defekt"
+    fi
+    if python3 -c "import ast; ast.parse(open('$patches_dir/patch-i18n-error-ts.py').read())" 2>/dev/null; then
+        pass "patch-i18n-error-ts.py syntaktisch gültig"
+    else
+        fail "patch-i18n-error-ts.py defekt"
     fi
 }
 
