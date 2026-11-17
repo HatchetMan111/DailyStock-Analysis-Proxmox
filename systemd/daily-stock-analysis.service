@@ -1,6 +1,6 @@
 [Unit]
 Description=Daily Stock Analysis (DSA) – KI-Aktienanalyse Web/API
-Documentation=https://github.com/HatchetMan111/DailyStockAnalysis-Proxmox
+Documentation=https://github.com/HatchetMan111/DailyStock-Analysis-Proxmox
 After=network-online.target
 Wants=network-online.target
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  📈 Daily Stock Analysis – One-Click-Installer (Proxmox VE)
-#  https://github.com/HatchetMan111/DailyStockAnalysis-Proxmox
+#  https://github.com/HatchetMan111/DailyStock-Analysis-Proxmox
 #
 #  Erstellt einen unprivilegierten LXC-Container und installiert darin
 #  daily_stock_analysis (https://github.com/ZhuLinsen/daily_stock_analysis):
@@ -13,7 +13,7 @@
 #  und pusht das fertige static/ in den CT – im Container läuft KEIN Node.js.
 #
 #  Installation (auf dem Proxmox-Host als root):
-#    bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStockAnalysis-Proxmox/main/install/daily-stock-analysis.sh)"
+#    bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStock-Analysis-Proxmox/main/install/daily-stock-analysis.sh)"
 #
 #  Mit Optionen (direkt hinter dem schließenden Anführungszeichen):
 #    ... " --id 220 --memory 4096 --port 8000
@@ -59,7 +59,7 @@ LOG_FILE="/tmp/${APP_NAME}-installer-$(date +%Y%m%d-%H%M%S).log"
 # Der fertige Einzeiler für Hinweise/Fehlerausgaben – exakt kopierbar (Optionen
 # hinter dem schließenden Anführungszeichen; der Installer erkennt sie via $0-Fallback)
 # shellcheck disable=SC2016  # Absicht: Literal, das zum Ausgeben gedacht ist
-ONE_LINER='bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStockAnalysis-Proxmox/main/install/daily-stock-analysis.sh)"'
+ONE_LINER='bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStock-Analysis-Proxmox/main/install/daily-stock-analysis.sh)"'
 NODE_IMAGE="node:20-slim"   # Frontend-Build (upstream Docker-Multi-Stage nutzt node:20)
 
 # ── Farben & Logging ───────────────────────────────────────────────────────
@@ -310,7 +310,7 @@ print_help() {
     cat <<'EOF'
 📈 Daily Stock Analysis – Proxmox-Installer (KI-Aktienanalyse, self-hosted)
 
-Installation:   bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStockAnalysis-Proxmox/main/install/daily-stock-analysis.sh)"
+Installation:   bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStock-Analysis-Proxmox/main/install/daily-stock-analysis.sh)"
 
 Optionen (hinter dem schließenden Anführungszeichen anhängen, z. B. ... " --id 220):
   --id ID          Container-ID (Default: nächste freie ab 200)
@@ -486,7 +486,7 @@ echo ">>> systemd-Unit schreiben (User ${APP_USER}, Restart=always) ..."
 cat > /etc/systemd/system/${SERVICE_NAME}.service <<UNITEOF
 [Unit]
 Description=Daily Stock Analysis (DSA) – KI-Aktienanalyse Web/API
-Documentation=https://github.com/HatchetMan111/DailyStockAnalysis-Proxmox
+Documentation=https://github.com/HatchetMan111/DailyStock-Analysis-Proxmox
 After=network-online.target
 Wants=network-online.target
 

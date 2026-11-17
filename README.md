@@ -16,7 +16,7 @@ App-Quelle: [ZhuLinsen/daily_stock_analysis](https://github.com/ZhuLinsen/daily_
 Auf dem Proxmox-Host als root:
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStockAnalysis-Proxmox/main/install/daily-stock-analysis.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStock-Analysis-Proxmox/main/install/daily-stock-analysis.sh)"
 ```
 
 Der Installer:
@@ -94,7 +94,7 @@ Ohne Key läuft die UI, Analysen benötigen aber ein Modell.
 
 ```bash
 # Update
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStockAnalysis-Proxmox/main/install/daily-stock-analysis.sh)" --update
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStock-Analysis-Proxmox/main/install/daily-stock-analysis.sh)" --update
 
 # Deinstall (fragt nach, löscht Container inkl. Daten)
 ... " --uninstall
@@ -112,7 +112,7 @@ Bei Fehlern gibt der Installer die **komplette Fehlerkette** aus
 vollständigen Trace:
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStockAnalysis-Proxmox/main/install/daily-stock-analysis.sh)" --debug
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStock-Analysis-Proxmox/main/install/daily-stock-analysis.sh)" --debug
 ```
 
 Das komplette Log liegt unter `/tmp/daily-stock-analysis-installer-*.log`.
@@ -135,7 +135,7 @@ ohne echten Proxmox-Host.
 ## 📁 Struktur
 
 ```
-DailyStockAnalysis-Proxmox/
+DailyStock-Analysis-Proxmox/
 ├── install/
 │   └── daily-stock-analysis.sh      # Einzeiler-Installer
 ├── systemd/
