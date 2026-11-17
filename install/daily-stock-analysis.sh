@@ -739,11 +739,23 @@ do_install() {
         die "Dieses Script muss als root auf dem Proxmox-Host laufen.
   Ausführen: sudo $0 $*"
     fi
-    for cmd in pct pvesh wget git docker; do
+    # Pflicht für jeden Modus: pct/pvesh (Proxmox), wget (Installer-Download), git (Clone).
+    for cmd in pct pvesh wget git; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             die "Benötigtes Kommando fehlt: $cmd"
         fi
     done
+    # Frontend-Build braucht docker/podman ODER node+npm – wird erst in
+    # build_frontend() konkret geprüft (dort steht die Auflösung mit Fallback).
+    if ! command -v docker >/dev/null 2>&1 && ! command -v podman >/dev/null 2>&1; then
+        if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+            die "Frontend-Build nicht möglich: weder docker/podman noch node/npm gefunden.
+  Optionen:
+  1. docker installieren (community-scripts: 'Docker')
+  2. node 20+ installieren (community-scripts: 'Node.js')
+  Danach erneut ausführen."
+        fi
+    fi
 
     # Vorhandenen CT mit gleichem Hostname finden (idempotent / --force)
     local existing_id
