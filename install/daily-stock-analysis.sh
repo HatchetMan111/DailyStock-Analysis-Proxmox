@@ -61,6 +61,8 @@ LOG_FILE="/tmp/${APP_NAME}-installer-$(date +%Y%m%d-%H%M%S).log"
 # shellcheck disable=SC2016  # Absicht: Literal, das zum Ausgeben gedacht ist
 ONE_LINER='bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DailyStock-Analysis-Proxmox/main/install/daily-stock-analysis.sh)"'
 NODE_IMAGE="node:20-slim"   # Frontend-Build (upstream Docker-Multi-Stage nutzt node:20)
+# Wurzel des Installations-Repos (für die I18n-Patches) – wird in main() gesetzt.
+REPO_ROOT=""
 
 # ── Farben & Logging ───────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -444,6 +446,21 @@ else
     git -C "${CHECKOUT_DIR}" clean -fd -e data -e logs -e reports -e static
 fi
 
+echo ">>> I18n-Patches einspielen (Setup-Status mehrsprachig, en auf Wunsch) ..."
+# Der Upstream liefert die Setup-Status-Karten (LLM 主渠道, 自选股, …) nur auf
+# Chinesisch. Die Patches (vom Host in /root gepusht) bringen:
+#  1. Backend: Übersetzungstabelle + language-Parameter + Accept-Language-Auswertung
+#  2. Frontend: apiClient schickt Accept-Language aus localStorage['dsa.uiLanguage']
+# Beide Patches sind idempotent (Marker-basiert) – Update/Re-Run unbedenklich.
+python3 /root/patch-i18n.py \
+    "${CHECKOUT_DIR}/src/services/system_config_service.py" \
+    "${CHECKOUT_DIR}/api/v1/endpoints/system_config.py" \
+    || die "I18n-Backend-Patch fehlgeschlagen – siehe Ausgabe oben."
+python3 /root/patch-i18n-frontend.py \
+    "${CHECKOUT_DIR}/apps/dsa-web/src/api/index.ts" \
+    || die "I18n-Frontend-Patch fehlgeschlagen – siehe Ausgabe oben."
+ok_echo "I18n-Patches eingespielt"
+
 echo ">>> Baue React/Vite-Frontend (npm ci + npm run build, im Container) ..."
 # Upstream-Build identisch zum Dockerfile: apps/dsa-web → npm ci + npm run build,
 # vite.config.ts (outDir ../../static) landet das Ergebnis unter ${CHECKOUT_DIR}/static.
@@ -571,6 +588,24 @@ echo ">>> Setup abgeschlossen."
 INNEREOF
 }
 
+# ── I18n-Patches bereitstellen ─────────────────────────────────────────────
+# Die Patches liegen im Installer-Repo unter install/patches/. Beim Einzeiler
+# (wget) ist das Repo nicht da – dann werden sie per wget von der Raw-URL
+# nachgeladen (identisch zu den Repo-Dateien). Idempotent.
+write_i18n_patches() {
+    local src_p1="$REPO_ROOT/install/patches/patch-i18n.py"
+    local src_p2="$REPO_ROOT/install/patches/patch-i18n-frontend.py"
+    if [[ -f "$src_p1" && -f "$src_p2" ]]; then
+        cp "$src_p1" "$TMP_DIR/patch-i18n.py"
+        cp "$src_p2" "$TMP_DIR/patch-i18n-frontend.py"
+        return 0
+    fi
+    # Fallback für den wget-Einzeiler: Patches von der Raw-URL laden.
+    local base="https://raw.githubusercontent.com/HatchetMan111/DailyStock-Analysis-Proxmox/main/install/patches"
+    wget -qO "$TMP_DIR/patch-i18n.py" "$base/patch-i18n.py" || die "I18n-Patch (Backend) konnte nicht geladen werden: $base/patch-i18n.py"
+    wget -qO "$TMP_DIR/patch-i18n-frontend.py" "$base/patch-i18n-frontend.py" || die "I18n-Patch (Frontend) konnte nicht geladen werden: $base/patch-i18n-frontend.py"
+}
+
 run_inner_setup() {
     local ct_id="$1"
     header "⚙️  Installiere Daily Stock Analysis im Container $ct_id"
@@ -589,6 +624,10 @@ run_inner_setup() {
     fi
     write_inner_script
     pct push "$ct_id" "$TMP_DIR/setup-inner.sh" /root/setup-inner.sh
+    # I18n-Patches (Setup-Status mehrsprachig) mit in den Container schieben.
+    write_i18n_patches
+    pct push "$ct_id" "$TMP_DIR/patch-i18n.py" /root/patch-i18n.py
+    pct push "$ct_id" "$TMP_DIR/patch-i18n-frontend.py" /root/patch-i18n-frontend.py
     # Variablen via env in den Container (kein Expansion-Heredoc → keine
     # Escaping-Gruben). set -o pipefail: ein Crash im Inner-Script darf nicht
     # durch `tee` maskiert werden (sonst meldet der Host Erfolg, der CT nicht).
@@ -909,6 +948,11 @@ do_status() {
 
 # ── Main ───────────────────────────────────────────────────────────────────
 main() {
+    # REPO_ROOT = Wurzel des Installations-Repos (für die I18n-Patches).
+    # Robust gegen Symlinks: dirname des Scripts, normalisiert.
+    REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    export REPO_ROOT
+
     parse_args "$@"
     # TMP_DIR erst hier setzen: cleanup() (EXIT-Trap) läuft auch bei
     # parse_args-Fehlern – vorher darf nichts in /tmp liegen, sonst räumt

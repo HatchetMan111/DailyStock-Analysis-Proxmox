@@ -15,6 +15,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALLER="$REPO_ROOT/install/daily-stock-analysis.sh"
+export REPO_ROOT
 WORK_DIR="$(mktemp -d)"
 MOCK_BIN="$WORK_DIR/mock-bin"
 PASS=0
@@ -384,6 +385,29 @@ test_uninstall() {
     fi
 }
 
+test_i18n_patch_files() {
+    echo "→ I18n-Patch-Dateien (Repo + Syntax)"
+    # Die Patches liegen im Repo unter install/patches/ und müssen gültiges
+    # Python sein (write_i18n_patches kopiert sie bei Repo-Nutzung, sonst wget).
+    local patches_dir="$REPO_ROOT/install/patches"
+    if [[ -f "$patches_dir/patch-i18n.py" && -f "$patches_dir/patch-i18n-frontend.py" ]]; then
+        pass "Patch-Dateien im Repo vorhanden"
+    else
+        fail "Patch-Dateien fehlen unter install/patches/"
+        return
+    fi
+    if python3 -c "import ast; ast.parse(open('$patches_dir/patch-i18n.py').read())" 2>/dev/null; then
+        pass "patch-i18n.py syntaktisch gültig"
+    else
+        fail "patch-i18n.py defekt"
+    fi
+    if python3 -c "import ast; ast.parse(open('$patches_dir/patch-i18n-frontend.py').read())" 2>/dev/null; then
+        pass "patch-i18n-frontend.py syntaktisch gültig"
+    else
+        fail "patch-i18n-frontend.py defekt"
+    fi
+}
+
 test_invalid_port() {
     echo "→ --port abc (Validierung)"
     local out rc
@@ -405,6 +429,7 @@ test_install_idempotent
 test_update
 test_status_running
 test_uninstall
+test_i18n_patch_files
 test_invalid_port
 
 echo
