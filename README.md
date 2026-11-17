@@ -25,9 +25,8 @@ Der Installer:
    nächste freie ID ab 200, Standard: 2 vCPU / 2 GB RAM / 8 GB Disk, `onboot:1`,
    `nesting=1`)
 2. klont das App-Repo von GitHub ( upstream `ZhuLinsen/daily_stock_analysis`)
-3. baut das React/Vite-Frontend **auf dem Proxmox-Host** (node:20-Container,
-   Fallback: Host-Node) und pusht das fertige `static/` in den Container –
-   im Container läuft kein Node.js
+3. baut das React/Vite-Frontend **im Container** (node+npm werden dort
+   installiert) – der Proxmox-Host braucht nur pct/wget/git
 4. installiert Python 3.11 + alle Abhängigkeiten in ein venv im Container
 5. richtet eine systemd-Unit ein (`daily-stock-analysis.service`,
    `Restart=always`, `After=network-online.target`)

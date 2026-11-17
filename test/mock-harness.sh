@@ -2,8 +2,8 @@
 # =============================================================================
 # Mock-Harness für install/daily-stock-analysis.sh
 # =============================================================================
-# Testet die Host-Seite des Installers (Argumente, pct create, Frontend-Build,
-# push_frontend, Verifikation, Update, Status) mit gemocktem pct/git/docker —
+# Testet die Host-Seite des Installers (Argumente, pct create, In-Container-Setup
+# inkl. Frontend-Build, Verifikation, Update, Status) mit gemocktem pct/git —
 # ohne echten Proxmox-Host, ohne sudo.
 #
 # Nutzung:
@@ -108,9 +108,11 @@ case "$1" in
                 ;;
             bash)
                 # bash -c 'set -o pipefail; bash /root/setup-inner.sh ...'
-                # -> Setup als erfolgreich werten: Service aktiv + Frontend da
-                mkdir -p "$STATE/$id.opt"
-                echo "mock: setup-inner.sh ausgeführt"
+                # -> Setup simulieren: Repo da, Frontend gebaut (static/), Service aktiv.
+                mkdir -p "$STATE/$id.opt/daily-stock-analysis/app/static/assets"
+                echo '<html><body>mock frontend</body></html>' > \
+                    "$STATE/$id.opt/daily-stock-analysis/app/static/index.html"
+                echo "mock: setup-inner.sh ausgeführt (inkl. npm build)"
                 touch "$STATE/$id.service-active"
                 ;;
             curl)
@@ -185,32 +187,6 @@ esac
 MOCKGIT
     chmod +x "$MOCK_BIN/git"
 
-    # docker: run ... simulieren + static/ bauen
-    cat > "$MOCK_BIN/docker" <<'MOCKDOCKER'
-#!/usr/bin/env bash
-# docker run --rm -v <src>:/app -w /app/apps/dsa-web ... node:20 bash -c 'npm ci && npm run build'
-# -> wir bauen das static/ direkt im gemounteten src (wie vite outDir)
-if [ "$1" = "run" ]; then
-    shift
-    src=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -v)
-                mount="$2"; src="${mount%%:/app*}"; shift 2 ;;
-            -w) shift 2 ;;
-            -e) shift 2 ;;
-            --rm) shift ;;
-            *) shift ;;
-        esac
-    done
-    if [ -n "$src" ]; then
-        mkdir -p "$src/static/assets"
-        echo '<html><body>mock frontend</body></html>' > "$src/static/index.html"
-        echo 'body{}' > "$src/static/assets/index.css"
-    fi
-fi
-MOCKDOCKER
-    chmod +x "$MOCK_BIN/docker"
 
     # pveam: Template-Liste (list local / available / download simulieren)
     cat > "$MOCK_BIN/pveam" <<'MOCKPVEAM'
@@ -303,7 +279,7 @@ test_status_not_found() {
 }
 
 test_install_happy() {
-    echo "→ Install (happy path, mit docker-Mock)"
+    echo "→ Install (happy path, In-Container-Build-Mock)"
     local out rc
     set +e
     out=$("${RUN_PREFIX[@]}" --yes --hostname dsa 2>&1)
@@ -322,15 +298,10 @@ test_install_happy() {
     else
         fail "CT nicht gemeldet: $(echo "$out" | grep -o 'Container [0-9]* erstellt' | head -1)"
     fi
-    if [[ "$out" == *"Frontend gebaut"* ]]; then
-        pass "Frontend-Build (docker) lief durch"
+    if [[ "$out" == *"Frontend gebaut"* || "$out" == *"setup-inner.sh"* || "$out" == *"App installiert"* ]]; then
+        pass "In-Container-Setup (inkl. Frontend-Build) lief durch"
     else
-        fail "Frontend-Build nicht gemeldet"
-    fi
-    if [[ "$out" == *"Frontend in den Container gepusht"* ]]; then
-        pass "push_frontend lief durch"
-    else
-        fail "push_frontend nicht gemeldet"
+        fail "In-Container-Setup nicht gemeldet: $(echo "$out" | grep -iE "frontend|setup-inner" | head -3)"
     fi
     if [[ "$out" == *"HTTP /health: 200 OK"* ]]; then
         pass "Verifikation HTTP 200"
@@ -375,10 +346,10 @@ test_update() {
     else
         fail "--update exit $rc – $(echo "$out" | tail -3)"
     fi
-    if [[ "$out" == *"Quellcode aktualisiert"* ]]; then
-        pass "--update aktualisiert Quellcode"
+    if [[ "$out" == *"App installiert"* || "$out" == *"setup-inner.sh"* || "$out" == *"git"* ]]; then
+        pass "--update aktualisiert App (In-Container-Setup)"
     else
-        fail "--update: Quellcode-Meldung fehlt"
+        fail "--update: Update-Meldung fehlt"
     fi
 }
 

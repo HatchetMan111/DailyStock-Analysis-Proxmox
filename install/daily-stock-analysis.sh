@@ -380,15 +380,30 @@ LOG_DIR="/var/log/${APP_NAME}"
 VENV="${APP_DIR}/.venv"
 SERVICE_NAME="daily-stock-analysis"
 
-echo ">>> Pakete installieren (Python, Build-Toolchain, wkhtmltopdf, CJK-Fonts) ..."
+echo ">>> Pakete installieren (Python, Node.js, Build-Toolchain, wkhtmltopdf, CJK-Fonts) ..."
 # wkhtmltopdf + fonts-noto-cjk: Markdown → PNG-Reports (upstream Docker nutzt beides)
 apt-get update -qq
 apt-get install -y -qq \
-    ca-certificates curl git tzdata \
+    ca-certificates curl git tzdata gnupg \
     python3.11 python3.11-venv python3-pip python3-dev \
     build-essential pkg-config libffi-dev libssl-dev \
     wkhtmltopdf xvfb libjpeg62-turbo libxrender1 libxext6 \
     fonts-noto-cjk fontconfig sqlite3 >/dev/null
+
+# Node.js >= 20 für den React/Vite-Build (Debian 12 bringt nur 18).
+# nodesource-Repo ist die官方-sources.list-Variante (kein curl|bash).
+if ! node --version >/dev/null 2>&1 || [ "$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)" -lt 20 ]; then
+    echo ">>> Node.js >= 20 einrichten (nodesource) ..."
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list
+    apt-get update -qq
+    apt-get install -y -qq nodejs >/dev/null
+fi
+node --version
+npm --version
 
 echo ">>> DNS festschreiben (DHCP-DNS des Netzes ist unzuverlässig) ..."
 # dhclient-Hook: verhindert, dass Lease-Renewals /etc/resolv.conf überschreiben.
@@ -423,10 +438,25 @@ else
     git -C "${CHECKOUT_DIR}" reset --hard FETCH_HEAD 2>/dev/null || \
         git -C "${CHECKOUT_DIR}" reset --hard "origin/${GIT_REF:-main}"
     # -e data/logs/reports: Die Laufzeitdaten des App-Users dürfen ein Update
-    # nicht löschen. -e static: dort liegt das vom Host gepushte Frontend,
-    # das NICHT im git-Repo steht und sonst weggewischt würde.
+    # nicht löschen. -e static: das gebaute Frontend (npm run build) liegt dort
+    # und wird nach dem Update neu gebaut – bei einem clean würde npm ci+build
+    # es zwar neu erzeugen, aber ein Abbruch dazwischen ließe die App ohne UI.
     git -C "${CHECKOUT_DIR}" clean -fd -e data -e logs -e reports -e static
 fi
+
+echo ">>> Baue React/Vite-Frontend (npm ci + npm run build, im Container) ..."
+# Upstream-Build identisch zum Dockerfile: apps/dsa-web → npm ci + npm run build,
+# vite.config.ts (outDir ../../static) landet das Ergebnis unter ${CHECKOUT_DIR}/static.
+# Der FastAPI-Server (api/app.py create_app(static_dir=…/static)) liefert es aus.
+cd "${CHECKOUT_DIR}/apps/dsa-web"
+npm ci --no-audit --no-fund || die "npm ci fehlgeschlagen – siehe Ausgabe oben."
+npm run build || die "npm run build fehlgeschlagen – siehe Ausgabe oben."
+if [ ! -f "${CHECKOUT_DIR}/static/index.html" ]; then
+    die "Build lief durch, aber ${CHECKOUT_DIR}/static/index.html fehlt – vite-outDir prüfen."
+fi
+# static muss für den Service-User lesbar sein.
+chown -R "${APP_USER}:${APP_USER}" "${CHECKOUT_DIR}/static"
+ok_echo "Frontend gebaut: ${CHECKOUT_DIR}/static/index.html"
 
 echo ">>> Python-vCPU-venv anlegen und Pakete installieren ..."
 python3.11 -m venv "${VENV}"
@@ -497,8 +527,8 @@ Group=${APP_USER}
 WorkingDirectory=${CHECKOUT_DIR}
 EnvironmentFile=${APP_DIR}/.env
 # Web/API-Server + Runtime-Scheduler (geplante Analysen).
-# WEBUI_AUTO_BUILD=false: Das Frontend wird vom Installer gebaut und liegt
-# in ${CHECKOUT_DIR}/static – der Container braucht kein node/npm.
+# WEBUI_AUTO_BUILD=false: Das Frontend wird vom Installer (npm im Container)
+# gebaut und liegt in ${CHECKOUT_DIR}/static – kein Auto-Build beim Boot.
 ExecStart=${VENV}/bin/python main.py --serve-only --host 0.0.0.0 --port ${PORT}
 Restart=always
 RestartSec=5
@@ -566,83 +596,6 @@ run_inner_setup() {
         APP_NAME="$APP_NAME" APP_USER="$APP_USER" APP_UID="$APP_UID" APP_GID="$APP_GID" \
         APP_DIR="/opt/${APP_NAME}" GIT_REF="${GIT_REF:-main}" \
         bash -c 'set -o pipefail; bash /root/setup-inner.sh 2>&1 | tee /var/log/daily-stock-analysis-setup.log'
-}
-
-# ── Frontend-Build auf dem Proxmox-Host ────────────────────────────────────
-# Der Upstream baut das React/Vite-Frontend in einem node:20-Container
-# (Dockerfile-Zeile: FROM node:20-slim AS web-builder → npm ci && npm run build).
-# Das Ergebnis liegt unter <repo>/static und wird vom FastAPI-Server
-# (api/app.py → create_app(static_dir=…/static)) direkt ausgeliefert.
-# Wir bauen es HIER auf dem Host und pushen es in den Container – dadurch
-# braucht der LXC kein node/npm (Boot schnell, Reboot-sicher, weniger Angriffsfläche).
-build_frontend() {
-    local ct_id="$1" src_dir="$2"
-    header "🌐 Baue React/Vite-Frontend (node:20)"
-
-    # Bevorzugt: Container-Laufzeit (docker/podman) auf dem PVE-Host – exakt
-    # das Upstream-Build-Image (node:20-slim), reproduzierbar ohne Host-Node.
-    local runtime=""
-    if command -v docker >/dev/null 2>&1; then
-        runtime="docker"
-    elif command -v podman >/dev/null 2>&1; then
-        runtime="podman"
-    fi
-
-    if [[ -n "$runtime" ]]; then
-        info "Baue Frontend via ${runtime} (${NODE_IMAGE}) ..."
-        # Upstream-Build: node:20, cwd /app/apps/dsa-web, npm ci + npm run build
-        # (vite.config.ts: outDir ../../static → landet unter /app/static).
-        if ! "$runtime" run --rm \
-            -v "${src_dir}:/app" \
-            -w /app/apps/dsa-web \
-            -e DSA_WEB_VERSION="${APP_COMMIT:-dev}" \
-            -e DSA_WEB_REVISION="${APP_COMMIT:-dev}" \
-            "${NODE_IMAGE}" \
-            bash -c 'npm ci --no-audit --no-fund && npm run build'; then
-            die "Frontend-Build fehlgeschlagen – siehe npm-Ausgabe oben.
-  Vollständiges Log: $LOG_FILE"
-        fi
-    else
-        # Fallback ohne docker/podman: node/npm direkt auf dem Host nutzen.
-        # (Der PVE-Host selbst bringt node mit; sonst per community-scripts
-        # nachrüsten: "Node.js" – oder man baut das static/ einmal lokal.)
-        warn "Weder docker noch podman gefunden – baue Frontend mit Host-node/npm ..."
-        local node_cmd="" npm_cmd=""
-        node_cmd=$(command -v node || true)
-        npm_cmd=$(command -v npm || true)
-        if [[ -z "$node_cmd" || -z "$npm_cmd" ]]; then
-            die "Kein docker/podman UND kein node/npm auf dem Proxmox-Host.
-  Optionen:
-  1. docker installieren (community-scripts: 'Docker' – danach erneut starten)
-  2. node 20+ installieren (community-scripts: 'Node.js')
-  3. Frontend woanders bauen und das static/ von Hand in den Container pushen"
-        fi
-        info "Baue Frontend mit ${node_cmd} / ${npm_cmd} ..."
-        if ! ( cd "${src_dir}/apps/dsa-web" \
-               && "$npm_cmd" ci --no-audit --no-fund \
-               && "$npm_cmd" run build ); then
-            die "Frontend-Build fehlgeschlagen – siehe npm-Ausgabe oben.
-  Vollständiges Log: $LOG_FILE"
-        fi
-    fi
-
-    if [ ! -f "${src_dir}/static/index.html" ]; then
-        die "Build lief durch, aber ${src_dir}/static/index.html fehlt –
-  unerwartetes Build-Verhalten (vite outDir prüfen)."
-    fi
-    ok "Frontend gebaut: ${src_dir}/static/index.html"
-}
-
-push_frontend() {
-    local ct_id="$1" src_dir="$2"
-    header "📦 Pushe fertiges Frontend in den Container $ct_id"
-    # In den Container an die Stelle, wo es der FastAPI-Server erwartet:
-    # api/app.py → create_app() → static_dir = <repo>/static
-    pct exec "$ct_id" -- rm -rf /opt/daily-stock-analysis/app/static
-    pct push "$ct_id" "${src_dir}/static" /opt/daily-stock-analysis/app/static
-    # Der Service läuft als APP_USER – static muss lesbar sein (644/755).
-    pct exec "$ct_id" -- chown -R "${APP_UID}:${APP_GID}" /opt/daily-stock-analysis/app/static
-    ok "Frontend in den Container gepusht"
 }
 
 # ── Verifikation ───────────────────────────────────────────────────────────
@@ -739,23 +692,14 @@ do_install() {
         die "Dieses Script muss als root auf dem Proxmox-Host laufen.
   Ausführen: sudo $0 $*"
     fi
-    # Pflicht für jeden Modus: pct/pvesh (Proxmox), wget (Installer-Download), git (Clone).
+    # Pflicht für den Host: pct/pvesh (Proxmox), wget (Installer-Download), git.
+    # Alles andere (node, npm, python, wkhtmltopdf …) wird im CONTAINER installiert –
+    # der Host bleibt unberührt (Community-Scripts-Prinzip).
     for cmd in pct pvesh wget git; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             die "Benötigtes Kommando fehlt: $cmd"
         fi
     done
-    # Frontend-Build braucht docker/podman ODER node+npm – wird erst in
-    # build_frontend() konkret geprüft (dort steht die Auflösung mit Fallback).
-    if ! command -v docker >/dev/null 2>&1 && ! command -v podman >/dev/null 2>&1; then
-        if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-            die "Frontend-Build nicht möglich: weder docker/podman noch node/npm gefunden.
-  Optionen:
-  1. docker installieren (community-scripts: 'Docker')
-  2. node 20+ installieren (community-scripts: 'Node.js')
-  Danach erneut ausführen."
-        fi
-    fi
 
     # Vorhandenen CT mit gleichem Hostname finden (idempotent / --force)
     local existing_id
@@ -855,24 +799,17 @@ do_install() {
     wait_for_ct_network "$CT_ID" || die "Kein Netzwerk im Container – Abbruch."
     verify_ct_dns "$CT_ID" || die "DNS im Container defekt – Abbruch."
 
-    # Frontend auf dem Host bauen und in den CT pushen
-    local src_dir="$TMP_DIR/app-src"
-    mkdir -p "$src_dir"
-    header "📥 Hole Quellcode von GitHub (${GIT_REF:-main})"
-    info "Clone: ${UPSTREAM_REPO}"
-    git clone --depth 1 ${GIT_REF:+--branch "$GIT_REF"} "$UPSTREAM_REPO" "$src_dir/app" \
-        || die "git clone fehlgeschlagen – Repo erreichbar?"
-    APP_COMMIT=$(git -C "$src_dir/app" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    ok "Quellcode da (Commit ${APP_COMMIT})"
-
-    build_frontend "$CT_ID" "$src_dir/app"
-
-    # Restliche Installation im Container (Python, .env, systemd, Service)
+    # ALLES im Container: run_inner_setup klont das Repo, baut das Frontend
+    # (node+npm werden im CT installiert) und richtet den Service ein –
+    # der Host braucht nur pct/wget/git.
     run_inner_setup "$CT_ID"
+    # Commit-Metadaten für die Summary aus dem Container lesen (|| true-Wrapper
+    # gegen pct-exec-Fehlchläge unter pipefail).
+    APP_COMMIT=$(pct exec "$CT_ID" -- git -C /opt/daily-stock-analysis/app rev-parse --short HEAD 2>/dev/null | tail -n 1 || true)
+    APP_COMMIT="${APP_COMMIT:-unbekannt}"
+    ok "App installiert (Commit ${APP_COMMIT})"
 
-    push_frontend "$CT_ID" "$src_dir/app"
-
-    # Service neu starten, damit er das gepushte static/ garantiert sieht
+    # Service neu starten, damit er das gebaute static/ garantiert sieht
     pct exec "$CT_ID" -- systemctl restart daily-stock-analysis || die "Service-Neustart fehlgeschlagen."
 
     verify_installation "$CT_ID"
@@ -898,29 +835,8 @@ do_update() {
     fi
     ensure_ct_running "$ct_id" || die "Container $ct_id konnte nicht gestartet werden."
 
-    # Quellcode + Frontend auf dem Host aktualisieren/bauen
-    local src_dir="$TMP_DIR/app-src"
-    mkdir -p "$src_dir"
-    header "📥 Aktualisiere Quellcode (${GIT_REF:-main})"
-    if [[ -d "$src_dir/app/.git" ]]; then
-        git -C "$src_dir/app" fetch --depth 1 origin "${GIT_REF:-main}" || \
-            git -C "$src_dir/app" fetch origin
-        git -C "$src_dir/app" checkout "${GIT_REF:-main}"
-        git -C "$src_dir/app" reset --hard FETCH_HEAD 2>/dev/null || \
-            git -C "$src_dir/app" reset --hard "origin/${GIT_REF:-main}"
-        git -C "$src_dir/app" clean -fd -e data -e logs -e reports
-    else
-        git clone --depth 1 ${GIT_REF:+--branch "$GIT_REF"} "$UPSTREAM_REPO" "$src_dir/app" \
-            || die "git clone fehlgeschlagen – Repo erreichbar?"
-    fi
-    APP_COMMIT=$(git -C "$src_dir/app" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    ok "Quellcode aktualisiert (Commit ${APP_COMMIT})"
-
-    build_frontend "$ct_id" "$src_dir/app"
-    push_frontend "$ct_id" "$src_dir/app"
-
-    # Inner-Script erneut laufen lassen: holt neuen Code in den CT, macht
-    # pip install, startet den Service neu (idempotent).
+    # Inner-Script erneut laufen lassen: aktualisiert Code + Frontend IM CT
+    # (git fetch + npm ci/build), macht pip install, startet den Service neu.
     run_inner_setup "$ct_id"
     pct exec "$ct_id" -- systemctl restart daily-stock-analysis || die "Service-Neustart fehlgeschlagen."
 
